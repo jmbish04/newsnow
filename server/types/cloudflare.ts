@@ -3,7 +3,7 @@
  * Type definitions for all Cloudflare services used in the article agent system
  */
 
-import type { D1Database, DurableObjectNamespace, Queue, R2Bucket } from "@cloudflare/workers-types"
+import type { D1Database, DurableObjectNamespace, Queue, R2Bucket, VectorizeIndex } from "@cloudflare/workers-types"
 import type { Ai } from "@cloudflare/ai"
 
 export interface Env {
@@ -12,6 +12,12 @@ export interface Env {
 
   // R2 Storage for articles (PDF, Markdown, JSON)
   ARTICLE_STORAGE: R2Bucket
+
+  // Main R2 bucket
+  R2: R2Bucket
+
+  // Vectorize index for RAG (semantic search)
+  VECTOR_INDEX: VectorizeIndex
 
   // Queue for article ingestion
   ARTICLE_QUEUE: Queue

@@ -17,7 +17,7 @@
  */
 
 export { BaseAgent } from "./base"
-export type { AgentEnv } from "./base"
+export type { AgentEnv, VectorSearchResult } from "./base"
 
 export { OrchestratorAgent } from "./orchestrator"
 export { EvaluatorOptimizerAgent } from "./evaluator"

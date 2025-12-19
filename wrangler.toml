@@ -21,6 +21,16 @@ database_id = "8a9e9dc5-7b14-4c7f-b74e-1309d4fd5172"
 binding = "ARTICLE_STORAGE"
 bucket_name = "newsnow-articles"
 
+# Main R2 bucket
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "newsnow"
+
+# Vectorize index for RAG (semantic search)
+[[vectorize]]
+binding = "VECTOR_INDEX"
+index_name = "newsnow"
+
 # Queue for article ingestion (decouples URL submission from processing)
 [[queues.producers]]
 binding = "ARTICLE_QUEUE"

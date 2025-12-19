@@ -13,8 +13,9 @@
  */
 
 import { Agent } from "agents"
-import type { D1Database } from "@cloudflare/workers-types"
+import type { D1Database, VectorizeIndex } from "@cloudflare/workers-types"
 import type { Ai } from "@cloudflare/ai"
+import { WorkerAI } from "../utils/worker-ai"
 import type {
   AIRequestOptions,
   AIResponse,
@@ -32,7 +33,24 @@ import type {
 export interface AgentEnv {
   NEWSNOW_DB: D1Database
   AI: Ai
+  VECTOR_INDEX: VectorizeIndex
   [key: string]: any
+}
+
+/**
+ * Vector search result
+ */
+export interface VectorSearchResult {
+  id: string
+  score: number
+  metadata: {
+    articleId: number
+    title: string
+    description?: string
+    tags?: string[]
+    url: string
+    ranking?: number
+  }
 }
 
 /**
@@ -40,6 +58,12 @@ export interface AgentEnv {
  */
 export class BaseAgent extends Agent<AgentEnv> {
   protected globalContext: GlobalContext | null = null
+  protected workerAI: WorkerAI
+
+  constructor(env: AgentEnv, sql: any) {
+    super(env, sql)
+    this.workerAI = new WorkerAI(env.AI)
+  }
 
   /**
    * Load global context from D1
@@ -305,6 +329,24 @@ export class BaseAgent extends Agent<AgentEnv> {
           }
         }
 
+        // Save to knowledge base (Vectorize) for semantic search
+        // Combine title, description, and tags for embedding
+        const textForEmbedding = [
+          articleData.title || "",
+          articleData.description || "",
+          (articleData.tags || []).join(" "),
+        ].filter(Boolean).join(" ")
+
+        if (textForEmbedding.trim()) {
+          await this.saveToKnowledgeBase(articleData.id, textForEmbedding, {
+            title: articleData.title || "Untitled",
+            description: articleData.description,
+            tags: articleData.tags,
+            url: articleData.url || "",
+            ranking: articleData.ranking,
+          })
+        }
+
         return true
       } else {
         // Cannot save without article ID
@@ -443,6 +485,110 @@ export class BaseAgent extends Agent<AgentEnv> {
       .first() as ArticleData | null
 
     return result
+  }
+
+  /**
+   * Search the knowledge base using RAG (Retrieval-Augmented Generation)
+   *
+   * Converts the query into embeddings and searches the Vectorize index
+   * for semantically similar articles.
+   *
+   * @param query - The search query string
+   * @param limit - Maximum number of results to return (default: 5)
+   * @returns Array of vector search results with article metadata
+   */
+  async searchKnowledgeBase(
+    query: string,
+    limit: number = 5,
+  ): Promise<VectorSearchResult[]> {
+    try {
+      // Generate embeddings for the query
+      const embeddingResult = await this.workerAI.generateEmbeddings(query)
+
+      if (!embeddingResult.success || !embeddingResult.data) {
+        this.log("Failed to generate embeddings for search", {
+          error: embeddingResult.error,
+        })
+        return []
+      }
+
+      // Query Vectorize index
+      const searchResults = await this.env.VECTOR_INDEX.query(embeddingResult.data, {
+        topK: limit,
+        returnMetadata: true,
+      })
+
+      // Transform results
+      const results: VectorSearchResult[] = searchResults.matches.map((match: any) => ({
+        id: match.id,
+        score: match.score,
+        metadata: match.metadata || {},
+      }))
+
+      this.log("Knowledge base search completed", {
+        query,
+        resultsCount: results.length,
+      })
+
+      return results
+    } catch (error) {
+      this.log("Error searching knowledge base", { error })
+      return []
+    }
+  }
+
+  /**
+   * Save article to the knowledge base (Vectorize)
+   *
+   * Generates embeddings from the article content and stores them
+   * in Vectorize with metadata for semantic search.
+   *
+   * @param articleId - The article ID
+   * @param text - The article text (title + description + content)
+   * @param metadata - Additional metadata to store with the vector
+   * @returns Success boolean
+   */
+  async saveToKnowledgeBase(
+    articleId: number,
+    text: string,
+    metadata: {
+      title: string
+      description?: string
+      tags?: string[]
+      url: string
+      ranking?: number
+    },
+  ): Promise<boolean> {
+    try {
+      // Generate embeddings for the article text
+      const embeddingResult = await this.workerAI.generateEmbeddings(text)
+
+      if (!embeddingResult.success || !embeddingResult.data) {
+        this.log("Failed to generate embeddings for article", {
+          articleId,
+          error: embeddingResult.error,
+        })
+        return false
+      }
+
+      // Insert into Vectorize index
+      await this.env.VECTOR_INDEX.insert([
+        {
+          id: `article-${articleId}`,
+          values: embeddingResult.data,
+          metadata: {
+            articleId,
+            ...metadata,
+          },
+        },
+      ])
+
+      this.log("Article saved to knowledge base", { articleId })
+      return true
+    } catch (error) {
+      this.log("Error saving to knowledge base", { articleId, error })
+      return false
+    }
   }
 
   /**
