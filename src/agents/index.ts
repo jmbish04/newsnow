@@ -24,6 +24,9 @@ export { EvaluatorOptimizerAgent } from "./evaluator"
 export { HumanInTheLoopAgent } from "./human-feedback"
 export type { FeedbackType, UserFeedback } from "./human-feedback"
 
+export { RAGAgent } from "./rag-agent"
+export type { RAGQueryResult, RAGResponse } from "./rag-agent"
+
 export type {
   AIRequestOptions,
   AIResponse,
