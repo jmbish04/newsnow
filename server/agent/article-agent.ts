@@ -227,7 +227,8 @@ export class ArticleAgent implements DurableObject {
     ).join("\n") || "No collections yet"
 
     // Truncate content if too long (Workers AI has token limits)
-    const truncatedContent = content.slice(0, 8000)
+    const AI_CONTENT_TRUNCATION_LIMIT = 8000;
+    const truncatedContent = content.slice(0, AI_CONTENT_TRUNCATION_LIMIT)
 
     const prompt = `You are an expert content analyzer helping a user filter and prioritize articles based on their interests.
 
