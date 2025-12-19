@@ -54,3 +54,12 @@ export function isiOS() {
   ].includes(navigator.platform)
   || (navigator.userAgent.includes("Mac") && "ontouchend" in document)
 }
+
+// AI Service Exports
+export { WorkerAI } from "./worker-ai"
+export type {
+  EmbeddingResponse,
+  ReasoningResponse,
+  StructuredResponse,
+  WorkerAIOptions,
+} from "./worker-ai"
