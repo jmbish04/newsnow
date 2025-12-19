@@ -33,9 +33,10 @@ max_batch_timeout = 30
 max_retries = 3
 dead_letter_queue = "article-ingestion-dlq"
 
-# Browser rendering for Puppeteer
-[browser]
-binding = "BROWSER"
+# Browser Rendering REST API credentials
+# Set these using: wrangler secret put CF_ACCOUNT_ID
+#                  wrangler secret put CF_API_TOKEN
+# The ArticleAgent uses these to call the Browser Rendering REST API
 
 # Durable Objects for Article Agents
 [[durable_objects.bindings]]

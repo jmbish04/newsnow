@@ -9,8 +9,8 @@ This system transforms NewsNow into an intelligent article processing platform u
 - **Cloudflare Agents SDK** (Durable Objects) - Individual agents for each article
 - **Cloudflare D1** - SQLite database for article metadata and collections
 - **Cloudflare R2** - Object storage for PDF, Markdown, and JSON artifacts
-- **Cloudflare Browser Rendering** - Puppeteer for rendering and extracting content
-- **Workers AI** - LLM-powered content analysis and ranking
+- **Cloudflare Browser Rendering REST API** - PDF and Markdown generation via HTTP endpoints
+- **Workers AI** - LLM-powered content analysis, ranking, and metadata extraction
 - **Cloudflare Queues** - Asynchronous URL ingestion
 
 ## Features
@@ -19,11 +19,13 @@ This system transforms NewsNow into an intelligent article processing platform u
 
 Each article is analyzed by an AI agent that:
 
-- Extracts title, author, date, and main topics
+- Extracts title, author, date, and main topics from Markdown content
 - Generates a concise summary
 - Calculates "Time ROI" (is it slop or deep work?)
 - Assigns a 1-100 ranking score based on your interests
 - Suggests relevant tags
+
+The AI performs metadata extraction directly from the article's Markdown content, eliminating the need for DOM manipulation and ensuring consistent extraction across all articles.
 
 ### 📚 Collections (Human-in-the-Loop)
 
@@ -157,20 +159,33 @@ GET /api/agent/article/123/artifact/json
 pnpm install
 ```
 
-### 2. Create Cloudflare Resources
+### 2. Configure Browser Rendering API Credentials
+
+Set your Cloudflare account ID and API token as secrets:
+
+```bash
+# Get your Account ID from the Cloudflare dashboard
+# Create an API token with "Browser Rendering" permissions
+wrangler secret put CF_ACCOUNT_ID
+wrangler secret put CF_API_TOKEN
+```
+
+**Note:** The Browser Rendering REST API requires these credentials to authenticate requests. The ArticleAgent uses these to call the `/markdown` and `/pdf` endpoints.
+
+### 3. Create Cloudflare Resources
 
 ```bash
 # Create R2 bucket
 npx wrangler r2 bucket create newsnow-articles
 
-# Create queue
+# Create queues
 npx wrangler queues create article-ingestion-queue
 npx wrangler queues create article-ingestion-dlq
 
 # D1 database should already exist from wrangler.toml
 ```
 
-### 3. Run Database Migrations
+### 4. Run Database Migrations
 
 ```bash
 # For local development
@@ -186,7 +201,7 @@ Or use the helper script:
 npx tsx ./scripts/init-article-db.ts
 ```
 
-### 4. Create Your First Collection
+### 5. Create Your First Collection
 
 This helps the AI understand your interests:
 
@@ -199,7 +214,7 @@ curl -X POST http://localhost:3000/api/agent/collections \
   }'
 ```
 
-### 5. Start Development Server
+### 6. Start Development Server
 
 ```bash
 npm run dev
@@ -287,9 +302,14 @@ curl -X POST http://localhost:3000/api/agent/feedback \
 1. User submits URLs → Queue
 2. Queue Consumer picks up message
 3. ArticleAgent Durable Object spawned
-4. Browser Rendering (PDF + Markdown)
-5. AI Analysis (summary, topics, ranking)
-6. R2 Storage (save artifacts)
+4. Browser Rendering REST API calls:
+   - POST /markdown → Get Markdown content
+   - POST /pdf → Get PDF binary
+5. AI Analysis:
+   - Extract metadata (title, author, date) from Markdown
+   - Generate summary, topics, and ranking
+   - Calculate "Time ROI" score
+6. R2 Storage (save PDF, Markdown, and JSON artifacts)
 7. D1 Update (article record with AI insights)
 8. Article appears in feed
 ```
@@ -328,10 +348,12 @@ The frontend should:
 ## Performance Considerations
 
 - Queue batching processes up to 10 URLs at once
-- Browser rendering has 30-second timeout
-- AI content is truncated to 8000 characters
+- Browser Rendering REST API calls have 30-second timeout
+- AI content is truncated to 8000 characters for token limits
+- Metadata extraction happens via AI (no DOM manipulation overhead)
 - R2 artifacts are cached with 1-hour TTL
 - D1 queries use indexes for fast lookups
+- REST API approach eliminates browser instance management overhead
 
 ## Future Enhancements
 
@@ -368,12 +390,31 @@ Verify bucket exists:
 npx wrangler r2 bucket list
 ```
 
-### Browser rendering timeout
+### Browser Rendering API errors
 
-Adjust timeout in `article-agent.ts`:
-```typescript
-await page.goto(url, { waitUntil: "networkidle0", timeout: 60000 })
+Verify your credentials are set:
+```bash
+wrangler secret list
 ```
+
+If you see authentication errors, recreate your API token with "Browser Rendering" permissions.
+
+Adjust timeout in `article-agent.ts` if needed:
+```typescript
+// In renderWithBrowserAPI method, update the fetch body:
+body: JSON.stringify({
+  url,
+  wait_for: "networkidle",
+  timeout: 60000 // Increase to 60 seconds if needed
+})
+```
+
+### API Rate Limits
+
+The Browser Rendering API has rate limits based on your plan. If you encounter rate limit errors:
+1. Reduce queue batch size in `wrangler.toml` (currently 10)
+2. Add retry logic with exponential backoff
+3. Upgrade your Cloudflare plan for higher limits
 
 ## License
 

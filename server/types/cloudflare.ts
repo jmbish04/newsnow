@@ -19,8 +19,9 @@ export interface Env {
   // Workers AI
   AI: Ai
 
-  // Browser Rendering
-  BROWSER: any // Puppeteer browser instance
+  // Cloudflare API credentials for Browser Rendering REST API
+  CF_ACCOUNT_ID: string
+  CF_API_TOKEN: string
 
   // Durable Object namespace for Article Agents
   ARTICLE_AGENT: DurableObjectNamespace
@@ -109,12 +110,6 @@ export interface AIAnalysisResult {
 export interface BrowserRenderResult {
   pdf_buffer: ArrayBuffer
   markdown: string
-  metadata: {
-    title?: string
-    author?: string
-    published_date?: string
-    description?: string
-  }
 }
 
 /**

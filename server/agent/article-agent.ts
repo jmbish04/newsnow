@@ -2,7 +2,7 @@
  * ArticleAgent - Durable Object for processing individual articles
  *
  * This agent handles:
- * 1. Browser rendering (PDF + Markdown generation)
+ * 1. Browser rendering via REST API (PDF + Markdown generation)
  * 2. AI-powered content extraction and analysis
  * 3. R2 storage of artifacts
  * 4. Ranking and "Time ROI" analysis
@@ -10,7 +10,6 @@
  */
 
 import type { DurableObject } from "@cloudflare/workers-types"
-import puppeteer from "@cloudflare/puppeteer"
 import type {
   AIAnalysisResult,
   Article,
@@ -59,11 +58,11 @@ export class ArticleAgent implements DurableObject {
       const article = await this.createArticleRecord(url)
       this.agentState.articleId = article.id
 
-      // Step 3: Browser rendering (PDF + Markdown)
-      this.agentState.progress = "Rendering page with browser"
-      const renderResult = await this.renderWithBrowser(url)
+      // Step 3: Browser rendering (PDF + Markdown) via REST API
+      this.agentState.progress = "Rendering page with Browser Rendering API"
+      const renderResult = await this.renderWithBrowserAPI(url)
 
-      // Step 4: AI extraction and analysis
+      // Step 4: AI extraction and analysis (including metadata extraction from markdown)
       this.agentState.progress = "Analyzing content with AI"
       const aiAnalysis = await this.analyzeWithAI(renderResult.markdown)
 
@@ -73,7 +72,7 @@ export class ArticleAgent implements DurableObject {
 
       // Step 6: Update article with AI insights
       this.agentState.progress = "Updating article with AI insights"
-      await this.updateArticleWithAI(article.id!, aiAnalysis, renderResult.metadata)
+      await this.updateArticleWithAI(article.id!, aiAnalysis)
 
       // Step 7: Create tags
       this.agentState.progress = "Creating tags"
@@ -129,65 +128,93 @@ export class ArticleAgent implements DurableObject {
   }
 
   /**
-   * Render page using Cloudflare Browser Rendering
-   * Generates PDF and Markdown
+   * Render page using Cloudflare Browser Rendering REST API
+   * Generates PDF and Markdown via HTTP requests
    */
-  private async renderWithBrowser(url: string): Promise<BrowserRenderResult> {
-    const browser = await puppeteer.launch(this.env.BROWSER)
+  private async renderWithBrowserAPI(url: string): Promise<BrowserRenderResult> {
+    const accountId = this.env.CF_ACCOUNT_ID
+    const apiToken = this.env.CF_API_TOKEN
 
-    try {
-      const page = await browser.newPage()
-      await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 })
+    if (!accountId || !apiToken) {
+      throw new Error("CF_ACCOUNT_ID and CF_API_TOKEN must be configured")
+    }
 
-      // Extract metadata
-      const metadata = await page.evaluate(() => {
-        const getMetaContent = (name: string) => {
-          const meta = document.querySelector(`meta[name="${name}"], meta[property="${name}"]`)
-          return meta?.getAttribute("content") || ""
-        }
+    const headers = {
+      "Authorization": `Bearer ${apiToken}`,
+      "Content-Type": "application/json",
+    }
 
-        return {
-          title: document.title || getMetaContent("og:title"),
-          author: getMetaContent("author") || getMetaContent("article:author"),
-          published_date: getMetaContent("article:published_time") || getMetaContent("date"),
-          description: getMetaContent("description") || getMetaContent("og:description"),
-        }
-      })
+    // Fetch Markdown
+    const markdownResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/browser/markdown`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          url,
+          wait_for: "networkidle",
+          timeout: 30000,
+        }),
+      },
+    )
 
-      // Generate PDF
-      const pdfBuffer = await page.pdf({
-        format: "A4",
-        printBackground: true,
-        margin: { top: "1cm", right: "1cm", bottom: "1cm", left: "1cm" },
-      })
+    if (!markdownResponse.ok) {
+      const errorText = await markdownResponse.text()
+      throw new Error(`Browser Rendering API (markdown) failed: ${markdownResponse.status} - ${errorText}`)
+    }
 
-      // Generate Markdown (simplified - extract main content)
-      const markdown = await page.evaluate(() => {
-        // Remove scripts, styles, nav, footer, etc.
-        const unwanted = document.querySelectorAll("script, style, nav, footer, header, aside, .ad, .advertisement")
-        unwanted.forEach(el => el.remove())
+    const markdownData = await markdownResponse.json() as { result: { markdown: string } }
+    const markdown = markdownData.result?.markdown || ""
 
-        // Get main content
-        const main = document.querySelector("main, article, .content, .post, #content") || document.body
+    if (!markdown) {
+      throw new Error("No markdown content received from Browser Rendering API")
+    }
 
-        return `# ${document.title}\n\n${main.textContent || ""}`
-      })
+    // Fetch PDF
+    const pdfResponse = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/browser/pdf`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          url,
+          options: {
+            format: "A4",
+            printBackground: true,
+            margin: {
+              top: "1cm",
+              right: "1cm",
+              bottom: "1cm",
+              left: "1cm",
+            },
+          },
+          wait_for: "networkidle",
+          timeout: 30000,
+        }),
+      },
+    )
 
-      await page.close()
+    if (!pdfResponse.ok) {
+      const errorText = await pdfResponse.text()
+      throw new Error(`Browser Rendering API (pdf) failed: ${pdfResponse.status} - ${errorText}`)
+    }
 
-      return {
-        pdf_buffer: pdfBuffer,
-        markdown,
-        metadata,
-      }
-    } finally {
-      await browser.close()
+    // The PDF endpoint returns binary data
+    const pdfBuffer = await pdfResponse.arrayBuffer()
+
+    if (!pdfBuffer || pdfBuffer.byteLength === 0) {
+      throw new Error("No PDF content received from Browser Rendering API")
+    }
+
+    return {
+      pdf_buffer: pdfBuffer,
+      markdown,
     }
   }
 
   /**
    * Analyze content using Workers AI
-   * Generates summary, topics, time ROI, and ranking
+   * Generates summary, topics, time ROI, ranking, AND extracts metadata
    */
   private async analyzeWithAI(content: string): Promise<AIAnalysisResult> {
     // Get all collections for context
@@ -207,18 +234,23 @@ export class ArticleAgent implements DurableObject {
 USER'S COLLECTIONS (their areas of interest):
 ${collectionsContext}
 
-ARTICLE CONTENT:
+ARTICLE CONTENT (Markdown):
 ${truncatedContent}
 
 Analyze this article and provide:
-1. A concise summary (2-3 sentences)
-2. Main topics/themes (3-5 keywords)
-3. "Time ROI" assessment: Is this content valuable deep work or low-value slop? Consider: originality, depth, actionability, and relevance to user's collections.
-4. A numerical ranking (1-100) based on how valuable this is for the user
-5. Suggested tags (3-7 specific tags)
+1. Extract metadata: title, author (if present), published_date (if present)
+2. A concise summary (2-3 sentences)
+3. Main topics/themes (3-5 keywords)
+4. "Time ROI" assessment: Is this content valuable deep work or low-value slop? Consider: originality, depth, actionability, and relevance to user's collections.
+5. A numerical ranking (1-100) based on how valuable this is for the user
+6. Suggested tags (3-7 specific tags)
 
 Respond in JSON format:
 {
+  "title": "Article Title",
+  "author": "Author Name" or null,
+  "published_date": "2025-01-15" or null,
+  "description": "Brief description...",
   "summary": "...",
   "main_topics": ["topic1", "topic2", ...],
   "time_roi": "High ROI: Deep technical insights on..." or "Low ROI: Generic content with...",
@@ -244,7 +276,10 @@ Respond in JSON format:
       const parsed = JSON.parse(jsonMatch[0])
 
       return {
-        summary: parsed.summary || "No summary available",
+        title: parsed.title || null,
+        author: parsed.author || null,
+        published_date: parsed.published_date || null,
+        summary: parsed.summary || parsed.description || "No summary available",
         main_topics: parsed.main_topics || [],
         time_roi: parsed.time_roi || "Unknown",
         ranking: Math.max(1, Math.min(100, parsed.ranking || 50)),
@@ -256,6 +291,9 @@ Respond in JSON format:
 
       // Fallback analysis
       return {
+        title: null,
+        author: null,
+        published_date: null,
         summary: "Content analysis unavailable",
         main_topics: [],
         time_roi: "Unknown: AI analysis failed",
@@ -303,7 +341,6 @@ Respond in JSON format:
     // Store JSON metadata + AI analysis
     const jsonData = {
       url,
-      metadata: renderResult.metadata,
       ai_analysis: aiAnalysis,
       processed_at: timestamp,
     }
@@ -325,7 +362,6 @@ Respond in JSON format:
   private async updateArticleWithAI(
     articleId: number,
     aiAnalysis: AIAnalysisResult,
-    metadata: BrowserRenderResult["metadata"],
   ): Promise<void> {
     await this.env.NEWSNOW_DB
       .prepare(`
@@ -341,10 +377,10 @@ Respond in JSON format:
         WHERE id = ?
       `)
       .bind(
-        metadata.title || null,
-        metadata.description || aiAnalysis.summary,
-        metadata.author || null,
-        metadata.published_date || null,
+        aiAnalysis.title || null,
+        aiAnalysis.summary,
+        aiAnalysis.author || null,
+        aiAnalysis.published_date || null,
         aiAnalysis.time_roi,
         aiAnalysis.ranking,
         "unread",
