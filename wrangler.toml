@@ -5,11 +5,45 @@ compatibility_date = "2024-10-03"
 [observability]
 enabled = true
 
+# AI binding for Workers AI
 [ai]
 binding = "AI"
 remote = true
 
+# D1 Database for article storage
 [[d1_databases]]
 binding = "NEWSNOW_DB"
 database_name = "newsnow"
 database_id = "8a9e9dc5-7b14-4c7f-b74e-1309d4fd5172"
+
+# R2 bucket for storing PDF/MD/JSON artifacts
+[[r2_buckets]]
+binding = "ARTICLE_STORAGE"
+bucket_name = "newsnow-articles"
+
+# Queue for article ingestion (decouples URL submission from processing)
+[[queues.producers]]
+binding = "ARTICLE_QUEUE"
+queue = "article-ingestion-queue"
+
+[[queues.consumers]]
+queue = "article-ingestion-queue"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 3
+dead_letter_queue = "article-ingestion-dlq"
+
+# Browser rendering for Puppeteer
+[browser]
+binding = "BROWSER"
+
+# Durable Objects for Article Agents
+[[durable_objects.bindings]]
+name = "ARTICLE_AGENT"
+class_name = "ArticleAgent"
+script_name = "newsnow"
+
+# Migrations directory
+[[migrations]]
+tag = "v1"
+new_classes = ["ArticleAgent"]
