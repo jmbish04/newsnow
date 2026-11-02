@@ -9,7 +9,7 @@ on:
 jobs:
   build-docker:
     name: Push Docker image to multiple registries
-    runs-on: ${{ vars.CI_RUNNER && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
+    runs-on: ${{ startsWith(vars.CI_RUNNER, '[') && endsWith(vars.CI_RUNNER, ']') && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     permissions:
       packages: write
       contents: read
